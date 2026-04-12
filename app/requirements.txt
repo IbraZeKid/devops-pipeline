@@ -1,0 +1,11 @@
+# Framework web
+flask==3.0.3
+ 
+# Expose les métriques au format Prometheus
+prometheus-flask-exporter==0.23.1
+ 
+# Framework de tests
+pytest==8.2.0
+ 
+# Librairie HTTP pour les tests
+requests==2.31.0
