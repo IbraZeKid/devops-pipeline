@@ -1,0 +1,169 @@
+name: Pipeline CI/CD — DevOps Ibrahim
+
+# ── Déclencheurs ────────────────────────────────────────────
+# Ce pipeline se lance dans 2 situations :
+on:
+  push:
+    branches:
+    - main # Push direct sur main → CI + CD (deploy)
+    - develop # Push sur develop → CI seulement (pas de deploy)
+  pull_request:
+    branches:
+    - main # PR vers main → CI seulement (vérification)
+
+# Variable globale : le nom complet de l'image Docker
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/flask-devops-app
+
+jobs:
+
+  # ════════════════════════════════════════════════════
+  # JOB 1 : Tests et qualité du code
+  # Se lance sur TOUS les pushs et PRs
+  # ════════════════════════════════════════════════════
+  test:
+    name: Tests & Lint
+    runs-on: ubuntu-latest # GitHub fournit une VM Ubuntu gratuite
+
+    steps:
+    # Étape 1 : Récupérer le code du repo
+    - name: Checkout du code
+      uses: actions/checkout@v4
+      # 'uses' = on utilise une action GitHub préfabriquée.
+      # actions/checkout@v4 clone ton repo dans la VM.
+
+      # Étape 2 : Installer Python 3.11
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # Étape 3 : Installer les dépendances
+    - name: Installer les dépendances
+      run: |
+        pip install -r app/requirements.txt
+        pip install flake8   # Outil de vérification du style de code
+
+    # Étape 4 : Lancer les tests automatisés
+    - name: Lancer les tests pytest
+      run: |
+        cd app
+        python -m pytest tests/ -v --tb=short
+        # -v = verbose (affiche chaque test)
+        # --tb=short = affiche un traceback court en cas d'échec
+
+    # Étape 5 : Vérifier le style du code
+    - name: Lint flake8
+      run: |
+        flake8 app/ --max-line-length=120 --exclude=app/tests/
+        # Si une ligne est > 120 caractères ou qu'il y a des erreurs
+        # de style, cette étape échoue → le pipeline s'arrête.
+
+  # ════════════════════════════════════════════════════
+  # JOB 2 : Scan de sécurité de l'image Docker
+  # Cherche des failles de sécurité connues (CVE)
+  # Se lance uniquement si le Job 1 a réussi
+  # ════════════════════════════════════════════════════
+  security-scan:
+    name: Scan sécurité Trivy
+    runs-on: ubuntu-latest
+    needs: test # Attend que 'test' réussisse avant de démarrer
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # On construit l'image pour la scanner
+    # On ne la pousse PAS encore sur Docker Hub
+    - name: Build image Docker pour scan
+      run: docker build -f docker/Dockerfile -t scan-target:latest .
+
+    # Trivy est un scanner de vulnérabilités open-source par Aqua Security
+    - name: Scanner avec Trivy
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'scan-target:latest'
+        format: 'table' # Affichage en tableau lisible
+        exit-code: '0' # 0 = on continue même si des vulnés sont trouvées
+        # exit-code: '1' stopperait le pipeline si HIGH ou CRITICAL trouvé
+        # On met 0 pour l'instant pour voir le rapport sans bloquer
+        severity: 'MEDIUM,HIGH,CRITICAL'
+
+  # ════════════════════════════════════════════════════
+  # JOB 3 : Build et push sur Docker Hub
+  # Se lance SEULEMENT sur le branch main
+  # ════════════════════════════════════════════════════
+  build-and-push:
+    name: Build & Push Docker Hub
+    runs-on: ubuntu-latest
+    needs: [ test, security-scan ]
+    # Condition : seulement si c'est un push sur main
+    # (pas sur les PRs, pas sur develop)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # Se connecter à Docker Hub avec nos secrets
+    - name: Login Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    # BuildKit = moteur de build Docker avancé (plus rapide, mieux caché)
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    # Build ET push en une étape
+    - name: Build & Push l'image
+      uses: docker/build-push-action@v5
+      with:
+        context: . # Contexte de build = racine du projet
+        file: docker/Dockerfile
+        push: true # On pousse réellement sur Docker Hub
+        tags: |
+          ${{ env.IMAGE_NAME }}:latest
+          ${{ env.IMAGE_NAME }}:${{ github.sha }}
+        # github.sha = l'identifiant unique du commit (40 caractères hex)
+        # Exemple : ibrahimdicko/flask-devops-app:a3f8b2c1...
+        # Utile pour savoir exactement quel commit est en prod
+
+        # ════════════════════════════════════════════════════
+        # JOB 4 : Déploiement automatique sur le VPS
+        # Se connecte en SSH et met à jour l'app
+        # ════════════════════════════════════════════════════
+        #deploy:
+        #name: Deploy en production
+        #runs-on: ubuntu-latest
+        #needs: build-and-push
+        #if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+        #steps:
+        #- uses: actions/checkout@v4
+
+        #- name: Déployer via SSH
+        # uses: appleboy/ssh-action@v1.0.0
+        #with:
+        # host: ${{ secrets.VPS_HOST }}
+        #username: ${{ secrets.VPS_USER }}
+        #key: ${{ secrets.VPS_SSH_KEY }}
+        # Ce script s'exécute sur ton serveur :
+        #script: |
+        # Aller dans le dossier du projet
+        # cd ~/devops-pipeline
+
+        # Récupérer le dernier code
+        #git pull origin main
+
+        # Passer le SHA du commit pour tagger l'image
+        #export IMAGE_TAG=${{ github.sha }}
+
+        # Télécharger la nouvelle image depuis Docker Hub
+        #docker compose -f docker-compose.prod.yml pull
+
+        # Redémarrer les services avec la nouvelle image
+        # --remove-orphans = supprime les vieux containers
+        #docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+        # Nettoyer les vieilles images pour libérer l'espace disque
+        #docker system prune -f

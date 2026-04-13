@@ -1,0 +1,66 @@
+version: '3.9'
+ 
+services:
+  app:
+    # En prod, on utilise l'image depuis Docker Hub
+    # (déjà buildée et testée par le pipeline)
+    image: ${DOCKERHUB_USERNAME}/flask-devops-app:${IMAGE_TAG:-latest}
+    expose:
+      - '5000'
+    environment:
+      - APP_VERSION=${IMAGE_TAG:-latest}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+ 
+  nginx:
+    image: nginx:alpine
+    ports:
+      - '80:80'
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+ 
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      # En prod, le mot de passe vient d'une variable d'environnement
+      # définie sur le serveur dans le fichier .env (jamais dans git !)
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U appuser -d appdb']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+ 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+ 
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - '3000:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+ 
+volumes:
+  pgdata:
+  prometheus_data:
+  grafana_data:
