@@ -1,0 +1,33 @@
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.env
+ 
+# ── Terraform ────────────────────────────────────────
+# CRITIQUE : terraform.tfvars contient tes secrets Oracle
+infra/terraform/.terraform/
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform.lock.hcl
+ 
+# ── Docker ───────────────────────────────────────────
+.docker/
+ 
+# ── Système ──────────────────────────────────────────
+.DS_Store
+*.log
+*.tmp
+Thumbs.db
+ 
+# ── SSH keys (ne JAMAIS commiter) ────────────────────
+*.pem
+id_rsa*
+id_deploy*

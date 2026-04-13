@@ -1,0 +1,101 @@
+---
+# hosts: vps = ce playbook s'applique aux serveurs du groupe 'vps'
+# défini dans inventory.ini
+- name: Configurer le serveur DevOps
+  hosts: vps
+  become: yes  # Équivalent de 'sudo' pour toutes les tâches
+ 
+  vars:
+    github_user: 'TON_USERNAME_GITHUB'  # Remplace ici
+    app_dir: '/home/ubuntu/devops-pipeline'
+ 
+  tasks:
+ 
+    # ── Mise à jour du système ────────────────────────────
+    - name: Mettre à jour les paquets
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600  # N'update pas si déjà fait < 1h
+ 
+    # ── Installation Docker ───────────────────────────────
+    - name: Installer les pré-requis Docker
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+ 
+    - name: Ajouter la clé GPG Docker
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+        gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg  # Ne re-lance pas si déjà fait
+ 
+    - name: Ajouter le dépôt Docker
+      shell: |
+        echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.gpg]
+        https://download.docker.com/linux/ubuntu jammy stable' |
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+ 
+    - name: Installer Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: yes
+        state: present
+ 
+    # ── Configuration ─────────────────────────────────────
+    - name: Ajouter ubuntu au groupe docker
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+      # Après ça, 'ubuntu' peut utiliser docker sans sudo
+ 
+    - name: Activer Docker au démarrage
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+ 
+    # ── Cloner le repo de l'application ───────────────────
+    - name: Installer Git
+      apt:
+        name: git
+        state: present
+ 
+    - name: Cloner le repo
+      git:
+        repo: 'https://github.com/{{ github_user }}/devops-pipeline.git'
+        dest: '{{ app_dir }}'
+        version: main
+      become_user: ubuntu
+ 
+    # ── Créer le fichier .env de production ───────────────
+    - name: Créer le fichier .env
+      copy:
+        dest: '{{ app_dir }}/.env'
+        content: |
+          DOCKERHUB_USERNAME={{ dockerhub_username }}
+          DB_PASSWORD={{ db_password }}
+          GRAFANA_PASSWORD={{ grafana_password }}
+        owner: ubuntu
+        mode: '0600'  # Seulement ubuntu peut lire ce fichier
+ 
+    # ── Lancer l'application ──────────────────────────────
+    - name: Lancer la stack Docker Compose
+      shell: |
+        cd {{ app_dir }}
+        docker compose -f docker-compose.prod.yml up -d
+      become_user: ubuntu
